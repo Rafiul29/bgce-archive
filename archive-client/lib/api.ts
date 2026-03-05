@@ -1,198 +1,85 @@
-import type { ApiCategory, ApiSubcategory, ApiResponse, ApiPost, ApiPostListItem, ApiPostListResponse } from '@/types/blog.type';
+import type { ApiCategory, ApiPostListItem, ApiPost } from "@/types/blog.type";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8080/api/v1';
-const POSTAL_API_URL = process.env.NEXT_PUBLIC_POSTAL_API_URL || 'http://localhost:8081/api/v1';
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080/api/v1";
+const POSTAL_API_URL = process.env.NEXT_PUBLIC_POSTAL_API_URL || "http://localhost:8081/api/v1";
 
-export async function getCategories(): Promise<ApiCategory[]> {
-    try {
-        const response = await fetch(`${API_BASE_URL}/categories?status=approved`, {
-            method: 'GET',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            cache: 'no-store', // Cache for 2 minutes (reduced from 5 minutes)
-        });
+/**
+ * Server-side API utility for React Server Components.
+ * Uses cache: 'no-store' to ensure fresh data per the user's requirement.
+ */
+export const api = {
+    // Fetch categories on the server
+    async getCategories(): Promise<ApiCategory[]> {
+        try {
+            const res = await fetch(`${API_URL}/categories?status=approved`, {
+                cache: 'no-store',
+                headers: { "Content-Type": "application/json" }
+            });
 
-        if (!response.ok) {
-            // Silently return empty array if backend is unavailable
+            if (!res.ok) return [];
+            const result = await res.json();
+
+            if (result.status && result.data) {
+                return result.data.filter((cat: any) => !cat.parent_id || cat.parent_id === null);
+            }
+            return [];
+        } catch (error) {
+            console.error("Error fetching categories on server:", error);
             return [];
         }
+    },
 
-        const result: ApiResponse<ApiCategory[]> = await response.json();
+    // Fetch posts on the server
+    async getPosts(filters: Record<string, any> = {}): Promise<{ data: ApiPostListItem[], total: number }> {
+        try {
+            const params = new URLSearchParams();
+            params.append("status", "published");
 
-        if (!result.status) {
-            return [];
+            Object.entries(filters).forEach(([key, value]) => {
+                if (value !== undefined && value !== null && value !== "") {
+                    params.append(key, value.toString());
+                }
+            });
+
+            const res = await fetch(`${POSTAL_API_URL}/posts?${params.toString()}`, {
+                cache: 'no-store',
+                headers: { "Content-Type": "application/json" }
+            });
+
+            if (!res.ok) return { data: [], total: 0 };
+            const result = await res.json();
+
+            if (result.status && result.data) {
+                return {
+                    data: result.data,
+                    total: result.meta?.total || 0,
+                };
+            }
+            return { data: [], total: 0 };
+        } catch (error) {
+            console.error("Error fetching posts on server:", error);
+            return { data: [], total: 0 };
         }
+    },
 
-        // Filter only top-level categories (no parent_id or parent_id is null/undefined/0)
-        return result.data.filter(cat => !cat.parent_id || cat.parent_id === null);
-    } catch (error) {
-        // Silently return empty array if fetch fails (backend not running)
-        return [];
-    }
-}
+    // Fetch single post by slug on the server
+    async getPostBySlug(slug: string): Promise<ApiPost | null> {
+        try {
+            const res = await fetch(`${POSTAL_API_URL}/posts/slug/${slug}`, {
+                cache: 'no-store',
+                headers: { "Content-Type": "application/json" }
+            });
 
-export async function getSubcategories(parentUuid?: string): Promise<ApiSubcategory[]> {
-    try {
-        const url = parentUuid
-            ? `${API_BASE_URL}/sub-categories?parent_uuid=${parentUuid}&status=approved`
-            : `${API_BASE_URL}/sub-categories?status=approved`;
+            if (!res.ok) return null;
+            const result = await res.json();
 
-        const response = await fetch(url, {
-            method: 'GET',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            cache: 'no-store', // Cache for 5 minutes
-        });
-
-        if (!response.ok) {
-            throw new Error(`Failed to fetch subcategories: ${response.statusText}`);
-        }
-
-        const result: ApiResponse<ApiSubcategory[] | null> = await response.json();
-
-        if (!result.status) {
-            throw new Error(result.message || 'Failed to fetch subcategories');
-        }
-
-        // Handle null data from backend
-        return result.data || [];
-    } catch (error) {
-        console.error('Error fetching subcategories:', error);
-        return [];
-    }
-}
-
-export async function getCategoryBySlug(slug: string): Promise<ApiCategory | null> {
-    try {
-        const response = await fetch(`${API_BASE_URL}/categories?slug=${slug}&status=approved`, {
-            method: 'GET',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            cache: 'no-store', // Cache for 10 minutes
-        });
-
-        if (!response.ok) {
-            throw new Error(`Failed to fetch category: ${response.statusText}`);
-        }
-
-        const result: ApiResponse<ApiCategory[]> = await response.json();
-
-        if (!result.status || result.data.length === 0) {
+            if (result.status && result.data) {
+                return result.data;
+            }
+            return null;
+        } catch (error) {
+            console.error(`Error fetching post ${slug} on server:`, error);
             return null;
         }
-
-        return result.data[0];
-    } catch (error) {
-        console.error('Error fetching category:', error);
-        return null;
     }
-}
-
-// Post API functions (Postal service)
-export async function getPosts(params?: {
-    status?: string;
-    category_id?: number;
-    sub_category_id?: number;
-    limit?: number;
-    offset?: number;
-}): Promise<ApiPostListItem[]> {
-    try {
-        const queryParams = new URLSearchParams();
-
-        // Only fetch published posts for public view
-        queryParams.append('status', 'published');
-
-        if (params?.category_id) {
-            queryParams.append('category_id', params.category_id.toString());
-        }
-        if (params?.sub_category_id) {
-            queryParams.append('sub_category_id', params.sub_category_id.toString());
-        }
-        if (params?.limit) {
-            queryParams.append('limit', params.limit.toString());
-        }
-        if (params?.offset) {
-            queryParams.append('offset', params.offset.toString());
-        }
-
-        const response = await fetch(`${POSTAL_API_URL}/posts?${queryParams.toString()}`, {
-            method: 'GET',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            cache: 'no-store',
-        });
-
-        if (!response.ok) {
-            throw new Error(`Failed to fetch posts: ${response.statusText}`);
-        }
-
-        const result: ApiPostListResponse = await response.json();
-
-        if (!result.status) {
-            throw new Error(result.message || 'Failed to fetch posts');
-        }
-
-        return result.data || [];
-    } catch (error) {
-        console.error('Error fetching posts:', error);
-        return [];
-    }
-}
-
-export async function getPostBySlug(slug: string): Promise<ApiPost | null> {
-    try {
-        const response = await fetch(`${POSTAL_API_URL}/posts/slug/${slug}`, {
-            method: 'GET',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            cache: 'no-store',
-        });
-
-        if (!response.ok) {
-            throw new Error(`Failed to fetch post: ${response.statusText}`);
-        }
-
-        const result: ApiResponse<ApiPost> = await response.json();
-
-        if (!result.status) {
-            return null;
-        }
-
-        return result.data;
-    } catch (error) {
-        console.error('Error fetching post:', error);
-        return null;
-    }
-}
-
-export async function getPostById(id: number): Promise<ApiPost | null> {
-    try {
-        const response = await fetch(`${POSTAL_API_URL}/posts/${id}`, {
-            method: 'GET',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            cache: 'no-store',
-        });
-
-        if (!response.ok) {
-            throw new Error(`Failed to fetch post: ${response.statusText}`);
-        }
-
-        const result: ApiResponse<ApiPost> = await response.json();
-
-        if (!result.status) {
-            return null;
-        }
-
-        return result.data;
-    } catch (error) {
-        console.error('Error fetching post:', error);
-        return null;
-    }
-}
+};

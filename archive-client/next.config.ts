@@ -37,7 +37,7 @@ const nextConfig: NextConfig = {
     ],
   },
 
-  // Headers for better caching
+  // Headers - only cache static assets
   async headers() {
     return [
       {
